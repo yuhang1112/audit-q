@@ -15,9 +15,13 @@ app = FastAPI()
 # 把 /static 路径映射到本地 ./static 目录，浏览器可以通过/static访问静态文件
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# 可以用/graph也可以用/static/graph.html访问生成的图
+@app.get("/graph")
+def read_root():
+    return FileResponse("static/graph.html")
+
 class Payload(BaseModel):
     edges: list[dict]   # [{"id":..., "from_acct":..., "to_acct":..., "amount":..., "label":...}]
-
 # 半监督图算法接口
 @app.post("/semi")
 def semi_graph(req: Payload):
@@ -58,7 +62,3 @@ def semi_graph(req: Payload):
         "risk_accounts": get_account_by_ids(sum(risk_clusters.values(), [])),
         "graph_url": web_path  # 返回生成的图的链接
     }
-# 可以用/graph也可以用/static/graph.html访问生成的图
-@app.get("/graph")
-def read_root():
-    return FileResponse("static/graph.html")
