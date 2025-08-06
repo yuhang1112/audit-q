@@ -4,28 +4,32 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sklearn.semi_supervised import LabelSpreading
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
 from logger import get_logger
 from generate_html import generate_html_2d, generate_html_3d
-from sql import get_account_by_ids
+from sql import get_account_by_ids, get_overdue_dataset
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
+import lightgbm as lgb
+import joblib
 
 app = FastAPI()
 # 把 /static 路径映射到本地 ./static 目录，浏览器可以通过/static访问静态文件
 app.mount("/static", StaticFiles(directory="static"), name="static")
+logger = get_logger(__name__)
+class Payload(BaseModel):
+    edges: list[dict]   # [{"id":..., "from_acct":..., "to_acct":..., "amount":..., "label":...}]
 
 # 可以用/graph也可以用/static/graph.html访问生成的图
 @app.get("/graph")
 def read_root():
     return FileResponse("static/graph.html")
 
-class Payload(BaseModel):
-    edges: list[dict]   # [{"id":..., "from_acct":..., "to_acct":..., "amount":..., "label":...}]
 # 半监督图算法接口
 @app.post("/semi")
 def semi_graph(req: Payload):
-    logger = get_logger(__name__)
     logger.info("半监督图算法程序已启动")
 
     # print("Received edges:", req.edges[0]["records"])
@@ -62,3 +66,42 @@ def semi_graph(req: Payload):
         "risk_accounts": get_account_by_ids(sum(risk_clusters.values(), [])),
         "graph_url": web_path  # 返回生成的图的链接
     }
+
+@app.post("/overdue")
+def predict_overdue():
+    logger.info(get_overdue_dataset())
+
+def train_overdue_model():
+    df = get_overdue_dataset()
+
+    # 特征 & 标签
+    feature_cols = [
+        'loan_amount', 'interest_rate', 'credit_score',
+        'risk_level_num', 'customer_type_num',
+        'days_since_approval', 'max_overdue_days', 'days_to_next_due'
+    ]
+    X = df[feature_cols].fillna(0)          # 把 NaN 填 0
+    y = df['is_overdue_30']
+
+    # 训练 / 验证
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42, stratify=y)
+
+    model = lgb.LGBMClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=-1,
+        metric='auc',
+        verbosity=-1
+    )
+    model.fit(X_train, y_train,
+              eval_set=[(X_test, y_test)],
+              early_stopping_rounds=50,
+              verbose=False)
+
+    auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+    print("AUC:", auc)
+
+    # 保存模型
+    joblib.dump(model, "./static/overdue_model.pkl")
+    return model
