@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from fastapi.responses import FileResponse
 from config import STATIC_DIR, REMOTE_ADDR
+from logger import get_logger
 os.makedirs(STATIC_DIR, exist_ok=True)   # 确保目录存在
-
+logger = get_logger(__name__)
 def generate_html_2d(G, risk_clusters):
     pos = nx.spring_layout(G)  # 为图计算布局
     colors = ['lightblue' if node not in risk_clusters else 'red' for node in G.nodes()]
@@ -33,16 +34,27 @@ def generate_html_2d(G, risk_clusters):
 
 def generate_html_3d(G, risk_clusters):
     pos = nx.spring_layout(G, dim=3)
+    # 合并所有团伙节点
+    risk_nodes = set()
+    for nodes in risk_clusters.values():
+        risk_nodes.update(nodes)
+    # 收集边坐标 & 颜色
+    risk_color = 'red'
+    normal_color = 'black'
 
-    # 边
     edge_x, edge_y, edge_z = [], [], []
+    edge_color = []
+
     for u, v in G.edges():
         edge_x += [pos[u][0], pos[v][0], None]
         edge_y += [pos[u][1], pos[v][1], None]
         edge_z += [pos[u][2], pos[v][2], None]
-
+        # 判断是否为风险团伙内部边
+        color = risk_color if (u in risk_nodes and v in risk_nodes) else normal_color
+        edge_color += [color, color, 'white']
+    # logger.info(edge_color)
     # 节点颜色
-    node_color = ['red' if node in risk_clusters else 'blue' for node in G.nodes()]
+    node_color = ['red' if node in risk_nodes else 'blue' for node in G.nodes()]
 
     node_trace = go.Scatter3d(
         x=[pos[n][0] for n in G.nodes()],
@@ -57,7 +69,7 @@ def generate_html_3d(G, risk_clusters):
     edge_trace = go.Scatter3d(
         x=edge_x, y=edge_y, z=edge_z,
         mode='lines',
-        line=dict(color='black', width=2)
+        line=dict(color=edge_color, width=2)
     )
 
     fig = go.Figure(data=[edge_trace, node_trace])

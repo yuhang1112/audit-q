@@ -11,7 +11,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 
 app = FastAPI()
-# 把 /static 路径映射到本地 ./static 目录
+# 把 /static 路径映射到本地 ./static 目录，浏览器可以通过/static访问静态文件
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 class Payload(BaseModel):
