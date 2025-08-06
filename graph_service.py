@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sklearn.semi_supervised import LabelSpreading
 from logger import get_logger
-from generate_html import generate_html_2d
+from generate_html import generate_html_2d, generate_html_3d
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -51,14 +51,14 @@ def semi_graph(req: Payload):
     logger.info(f"风险团伙: {risk_clusters}")
 
     # 可视化
-    html_path = generate_html_2d(G, risk_clusters)
+    web_path = generate_html_3d(G, risk_clusters)
 
     return {
         "risk_clusters": risk_clusters,
         "risk_accounts": sum(risk_clusters.values(), []),
-        "graph_url": html_path  # 返回生成的图的链接
+        "graph_url": web_path  # 返回生成的图的链接
     }
-
+# 可以用/graph也可以用/static/graph.html访问生成的图
 @app.get("/graph")
 def read_root():
     return FileResponse("static/graph.html")
