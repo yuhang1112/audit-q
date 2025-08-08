@@ -9,11 +9,13 @@ from sklearn.metrics import roc_auc_score
 from logger import get_logger
 from generate_html import generate_html_2d, generate_html_3d
 from sql import get_account_by_ids, get_overdue_dataset
+from config import CACHE_DIR, STATIC_DIR
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
 import lightgbm as lgb
 import joblib
+import os
 
 app = FastAPI()
 # 把 /static 路径映射到本地 ./static 目录，浏览器可以通过/static访问静态文件
@@ -69,39 +71,61 @@ def semi_graph(req: Payload):
 
 @app.post("/overdue")
 def predict_overdue():
-    logger.info(get_overdue_dataset())
-
-def train_overdue_model():
     df = get_overdue_dataset()
-
-    # 特征 & 标签
+    logger.info(df)
+    result = train_overdue_model(df)
+    logger.info(f"模型训练完成，开始生成打分结果\n")
+    csv_path = os.path.join(STATIC_DIR, 'overdue_scores.csv')
+    result.to_csv(csv_path, index=False, encoding='utf-8-sig')
+    logger.info(f"打分结果已保存到: {csv_path}")
+def train_overdue_model(df):
     feature_cols = [
         'loan_amount', 'interest_rate', 'credit_score',
         'risk_level_num', 'customer_type_num',
         'days_since_approval', 'max_overdue_days', 'days_to_next_due'
     ]
-    X = df[feature_cols].fillna(0)          # 把 NaN 填 0
+    X = df[feature_cols].fillna(0)
     y = df['is_overdue_30']
 
-    # 训练 / 验证
-    X_train, X_test, y_train, y_test = train_test_split(
+    # 1. 分层采样 + 训练/验证集
+    X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y)
 
-    model = lgb.LGBMClassifier(
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=-1,
-        metric='auc',
-        verbosity=-1
+    # 2. 处理不平衡
+    pos_rate = y.mean()          # ≈ 0.02
+    logger.info(f"正样本比例: {pos_rate:.2%}")
+    scale_pos_weight = (1 - pos_rate) / pos_rate
+
+    # 3. 用原生接口，方便传 scale_pos_weight
+    train_data = lgb.Dataset(X_train, label=y_train)
+    val_data   = lgb.Dataset(X_val,   label=y_val, reference=train_data)
+
+    params = {
+        'objective': 'binary',
+        'metric': 'auc',
+        'learning_rate': 0.05,
+        'num_leaves': 32,
+        'max_depth': 4,
+        'min_data_in_leaf': 1,
+        'scale_pos_weight': scale_pos_weight,
+        'verbose': -1,
+        'feature_fraction': 0.8,
+        'bagging_fraction': 0.8,
+        'bagging_freq': 1,
+        'lambda_l2': 0.1
+    }
+
+    model = lgb.train(
+        params,
+        train_data,
+        num_boost_round=1000,
+        valid_sets=[train_data, val_data]
     )
-    model.fit(X_train, y_train,
-              eval_set=[(X_test, y_test)],
-              early_stopping_rounds=50,
-              verbose=False)
 
-    auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
-    print("AUC:", auc)
+    # 4. 保存
+    joblib.dump(model, os.path.join(CACHE_DIR, "overdue_model.pkl"))
 
-    # 保存模型
-    joblib.dump(model, "./static/overdue_model.pkl")
-    return model
+    # 5. 给整表打分
+    df['prob'] = model.predict(X)
+    # return df[['loan_id', 'prob']].to_dict(orient='records')
+    return df[['loan_id', 'prob']]
