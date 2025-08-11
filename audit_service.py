@@ -9,7 +9,7 @@ from sklearn.metrics import roc_auc_score
 from logger import get_logger
 from generate_html import generate_html_2d, generate_html_3d
 from sql import get_account_by_ids, get_overdue_dataset
-from config import CACHE_DIR, STATIC_DIR
+from config import CACHE_DIR, STATIC_DIR, REMOTE_ADDR
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -73,12 +73,20 @@ def semi_graph(req: Payload):
 def predict_overdue():
     df = get_overdue_dataset()
     logger.info(df)
-    result = train_overdue_model(df)
+    result = train_overdue_model(df, True)
+
     logger.info(f"模型训练完成，开始生成打分结果\n")
     csv_path = os.path.join(STATIC_DIR, 'overdue_scores.csv')
     result.to_csv(csv_path, index=False, encoding='utf-8-sig')
     logger.info(f"打分结果已保存到: {csv_path}")
-def train_overdue_model(df):
+
+    # 构造返回
+    return {
+        "result": result.to_dict(orient='records'),
+        "csv_url": f"{REMOTE_ADDR}overdue_scores.csv"
+    }
+
+def train_overdue_model(df, use_cache=False):
     feature_cols = [
         'loan_amount', 'interest_rate', 'credit_score',
         'risk_level_num', 'customer_type_num',
@@ -86,46 +94,51 @@ def train_overdue_model(df):
     ]
     X = df[feature_cols].fillna(0)
     y = df['is_overdue_30']
+    MODEL_PATH = os.path.join(CACHE_DIR, "overdue_model.pkl")
+    # 1. 如果允许缓存且模型文件存在，直接加载
+    if use_cache and os.path.exists(MODEL_PATH):
+        logger.info("发现缓存模型，直接加载")
+        model = joblib.load(MODEL_PATH)
+    else:
+        logger.info("缓存不存在或强制重新训练")
+        # 1. 分层采样 + 训练/验证集
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y)
 
-    # 1. 分层采样 + 训练/验证集
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y)
+        # 2. 处理不平衡
+        pos_rate = y.mean()          # ≈ 0.02
+        logger.info(f"正样本比例: {pos_rate:.2%}")
+        scale_pos_weight = (1 - pos_rate) / pos_rate
 
-    # 2. 处理不平衡
-    pos_rate = y.mean()          # ≈ 0.02
-    logger.info(f"正样本比例: {pos_rate:.2%}")
-    scale_pos_weight = (1 - pos_rate) / pos_rate
+        # 3. 用原生接口，方便传 scale_pos_weight
+        train_data = lgb.Dataset(X_train, label=y_train)
+        val_data   = lgb.Dataset(X_val,   label=y_val, reference=train_data)
 
-    # 3. 用原生接口，方便传 scale_pos_weight
-    train_data = lgb.Dataset(X_train, label=y_train)
-    val_data   = lgb.Dataset(X_val,   label=y_val, reference=train_data)
+        params = {
+            'objective': 'binary',
+            'metric': 'auc',
+            'learning_rate': 0.05,
+            'num_leaves': 32,
+            'max_depth': 4,
+            'min_data_in_leaf': 1,
+            'scale_pos_weight': scale_pos_weight,
+            'verbose': -1,
+            'feature_fraction': 0.8,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 1,
+            'lambda_l2': 0.1
+        }
 
-    params = {
-        'objective': 'binary',
-        'metric': 'auc',
-        'learning_rate': 0.05,
-        'num_leaves': 32,
-        'max_depth': 4,
-        'min_data_in_leaf': 1,
-        'scale_pos_weight': scale_pos_weight,
-        'verbose': -1,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 1,
-        'lambda_l2': 0.1
-    }
+        model = lgb.train(
+            params,
+            train_data,
+            num_boost_round=1000,
+            valid_sets=[train_data, val_data]
+        )
 
-    model = lgb.train(
-        params,
-        train_data,
-        num_boost_round=1000,
-        valid_sets=[train_data, val_data]
-    )
-
-    # 4. 保存
-    joblib.dump(model, os.path.join(CACHE_DIR, "overdue_model.pkl"))
+        # 4. 保存
+        joblib.dump(model, MODEL_PATH)
 
     # 5. 给整表打分
     df['prob'] = model.predict(X)
-    # return df[['loan_id', 'prob']].to_dict(orient='records')
     return df[['loan_id', 'prob']]
