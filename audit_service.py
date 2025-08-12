@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import lightgbm as lgb
 import joblib
 import os
+import seaborn as sns
 
 app = FastAPI()
 # 把 /static 路径映射到本地 ./static 目录，浏览器可以通过/static访问静态文件
@@ -79,11 +80,13 @@ def predict_overdue():
     csv_path = os.path.join(STATIC_DIR, 'overdue_scores.csv')
     result.to_csv(csv_path, index=False, encoding='utf-8-sig')
     logger.info(f"打分结果已保存到: {csv_path}")
-
+    high_risk = result[result['prob'] > 0.7]
+    img_url = draw_overdue_chart(result)
     # 构造返回
     return {
-        "result": result.to_dict(orient='records'),
-        "csv_url": f"{REMOTE_ADDR}overdue_scores.csv"
+        "result": high_risk.to_dict(orient='records'),
+        "csv_url": f"{REMOTE_ADDR}overdue_scores.csv",
+        "img_url": img_url
     }
 
 def train_overdue_model(df, use_cache=False):
@@ -142,3 +145,33 @@ def train_overdue_model(df, use_cache=False):
     # 5. 给整表打分
     df['prob'] = model.predict(X)
     return df[['loan_id', 'prob']]
+
+# 绘图并返回 URL
+def draw_overdue_chart(high_df: pd.DataFrame):
+    """
+    high_df 必须包含 loan_id, prob
+    """
+    if high_df.empty:
+        return None
+
+    save_dir = os.path.join(STATIC_DIR, "images")
+    os.makedirs(save_dir, exist_ok=True)
+    file_name = "overdue_high_risk.png"
+    full_path = os.path.join(save_dir, file_name)
+
+    plt.figure(figsize=(6, max(3, len(high_df) * 0.4)))   # 自适应高度
+    sns.set_style("whitegrid")
+    sns.barplot(
+        x='prob',
+        y='loan_id',
+        data=high_df.sort_values('prob', ascending=False),
+        palette='Reds_r'
+    )
+    plt.xlim(0, 1)
+    plt.xlabel('30 天逾期概率')
+    plt.title('高风险贷款 TOP')
+    plt.tight_layout()
+    plt.savefig(full_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    return f"{REMOTE_ADDR}images/{file_name}"
