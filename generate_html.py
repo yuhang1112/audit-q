@@ -34,28 +34,16 @@ def generate_html_2d(G, risk_clusters):
 
 def generate_html_3d(G, risk_clusters):
     pos = nx.spring_layout(G, dim=3)
-    # 合并所有团伙节点
-    risk_nodes = set()
-    for nodes in risk_clusters.values():
-        risk_nodes.update(nodes)
-    # 收集边坐标 & 颜色
-    risk_color = 'red'
-    normal_color = 'black'
+    risk_nodes = set(sum(risk_clusters.values(), []))
 
-    edge_x, edge_y, edge_z = [], [], []
-    edge_color = []
+    # ---------- 1. 坐标含义标题 ----------
+    axis_title = dict(
+        xaxis=dict(title=dict(text="坐标轴仅为布局，无实际量纲")),
+        yaxis=dict(title=dict(text="相互距离越近代表关联程度更高"))
+    )
 
-    for u, v in G.edges():
-        edge_x += [pos[u][0], pos[v][0], None]
-        edge_y += [pos[u][1], pos[v][1], None]
-        edge_z += [pos[u][2], pos[v][2], None]
-        # 判断是否为风险团伙内部边
-        color = risk_color if (u in risk_nodes and v in risk_nodes) else normal_color
-        edge_color += [color, color, 'white']
-    # logger.info(edge_color)
-    # 节点颜色
-    node_color = ['red' if node in risk_nodes else 'blue' for node in G.nodes()]
-
+    # ---------- 2. 节点 ----------
+    node_color = ['red' if n in risk_nodes else 'blue' for n in G.nodes()]
     node_trace = go.Scatter3d(
         x=[pos[n][0] for n in G.nodes()],
         y=[pos[n][1] for n in G.nodes()],
@@ -63,17 +51,47 @@ def generate_html_3d(G, risk_clusters):
         mode='markers',
         marker=dict(size=6, color=node_color),
         text=list(G.nodes()),
-        hoverinfo='text'
+        hoverinfo='text',
+        name='账户节点'
     )
 
+    # ---------- 3. 边 ----------
+    edge_x, edge_y, edge_z, edge_color = [], [], [], []
+    for u, v in G.edges():
+        edge_x += [pos[u][0], pos[v][0], None]
+        edge_y += [pos[u][1], pos[v][1], None]
+        edge_z += [pos[u][2], pos[v][2], None]
+        color = 'red' if (u in risk_nodes and v in risk_nodes) else 'black'
+        edge_color += [color, color, 'white']
     edge_trace = go.Scatter3d(
         x=edge_x, y=edge_y, z=edge_z,
         mode='lines',
-        line=dict(color=edge_color, width=2)
+        line=dict(color=edge_color, width=2),
+        name='边权重：金额'
     )
 
-    fig = go.Figure(data=[edge_trace, node_trace])
-    local_path = os.path.join(STATIC_DIR, "graph_3d.html")
-    fig.write_html(local_path, include_plotlyjs='cdn', auto_open=False)
-    web_path = os.path.join(REMOTE_ADDR, "graph_3d.html")
-    return web_path
+    # ---------- 4. 图例（虚拟点） ----------
+    legend_red = go.Scatter3d(
+        x=[None], y=[None], z=[None],
+        mode='markers',
+        marker=dict(size=8, color='red'),
+        name='风险团伙'
+    )
+    legend_blue = go.Scatter3d(
+        x=[None], y=[None], z=[None],
+        mode='markers',
+        marker=dict(size=8, color='blue'),
+        name='正常账户'
+    )
+
+    # ---------- 5. 组装 ----------
+    fig = go.Figure(data=[edge_trace, node_trace, legend_red, legend_blue])
+    fig.update_layout(
+        scene=dict(**axis_title),
+        title="票据中介 3D 关系图",
+        legend=dict(x=0, y=1)
+    )
+
+    path_html = os.path.join(STATIC_DIR, "graph_3d.html")
+    fig.write_html(path_html, include_plotlyjs='cdn')
+    return os.path.join(REMOTE_ADDR, "graph_3d.html")

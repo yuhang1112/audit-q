@@ -81,12 +81,12 @@ def predict_overdue():
     result.to_csv(csv_path, index=False, encoding='utf-8-sig')
     logger.info(f"打分结果已保存到: {csv_path}")
     high_risk = result[result['prob'] > 0.7]
-    img_url = draw_overdue_chart(result)
+    # img_url = draw_overdue_chart(result)
     # 构造返回
     return {
         "result": high_risk.to_dict(orient='records'),
         "csv_url": f"{REMOTE_ADDR}overdue_scores.csv",
-        "img_url": img_url
+        # "img_url": img_url
     }
 
 def train_overdue_model(df, use_cache=False):
