@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 from logger import get_logger
 from generate_html import generate_html_2d, generate_html_3d
-from sql import get_account_by_ids, get_overdue_dataset
+from sql import get_account_by_ids, get_overdue_dataset, get_overdue_valset
 from config import CACHE_DIR, STATIC_DIR, REMOTE_ADDR
 import pandas as pd
 import networkx as nx
@@ -73,23 +73,27 @@ def semi_graph(req: Payload):
 @app.post("/overdue")
 def predict_overdue():
     df = get_overdue_dataset()
-    logger.info(df)
-    result = train_overdue_model(df, True)
+    logger.info(f"训练集：\n{df}")
+    val_df = get_overdue_valset()
+    logger.info(f"验证集：\n{val_df}")
+    result = train_overdue_model(df, val_df, False)
 
     logger.info(f"模型训练完成，开始生成打分结果\n")
     csv_path = os.path.join(STATIC_DIR, 'overdue_scores.csv')
     result.to_csv(csv_path, index=False, encoding='utf-8-sig')
     logger.info(f"打分结果已保存到: {csv_path}")
+
     high_risk = result[result['prob'] > 0.7]
-    # img_url = draw_overdue_chart(result)
+    logger.info("开始生成图表")
+    img_url = draw_overdue_chart(result)
     # 构造返回
     return {
         "result": high_risk.to_dict(orient='records'),
         "csv_url": f"{REMOTE_ADDR}overdue_scores.csv",
-        # "img_url": img_url
+        "img_url": img_url
     }
 
-def train_overdue_model(df, use_cache=False):
+def train_overdue_model(df, val_df, use_cache=False):
     feature_cols = [
         'loan_amount', 'interest_rate', 'credit_score',
         'risk_level_num', 'customer_type_num',
@@ -143,16 +147,18 @@ def train_overdue_model(df, use_cache=False):
         joblib.dump(model, MODEL_PATH)
 
     # 5. 给整表打分
-    df['prob'] = model.predict(X)
-    return df[['loan_id', 'prob']]
+    val_X = val_df[feature_cols].fillna(0)
+    val_df['prob'] = model.predict(val_X)
+    return val_df[['loan_id', 'prob']]
 
 # 绘图并返回 URL
 def draw_overdue_chart(high_df: pd.DataFrame):
     """
     high_df 必须包含 loan_id, prob
     """
-    if high_df.empty:
-        return None
+    # high_df = high_df[high_df['prob'] >= 0.05]
+    # if high_df.empty:
+    #     return None
 
     save_dir = os.path.join(STATIC_DIR, "images")
     os.makedirs(save_dir, exist_ok=True)
@@ -168,8 +174,8 @@ def draw_overdue_chart(high_df: pd.DataFrame):
         palette='Reds_r'
     )
     plt.xlim(0, 1)
-    plt.xlabel('30 天逾期概率')
-    plt.title('高风险贷款 TOP')
+    plt.xlabel('30-day Overdue Probability')
+    plt.title('High-Risk Loans TOP')
     plt.tight_layout()
     plt.savefig(full_path, dpi=150, bbox_inches='tight')
     plt.close()
