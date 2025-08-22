@@ -76,19 +76,20 @@ def predict_overdue():
     logger.info(f"训练集：\n{df}")
     val_df = get_overdue_valset()
     logger.info(f"验证集：\n{val_df}")
-    result = train_overdue_model(df, val_df, False)
+    result = train_overdue_model(df, val_df, True)
 
     logger.info(f"模型训练完成，开始生成打分结果\n")
     csv_path = os.path.join(STATIC_DIR, 'overdue_scores.csv')
     result.to_csv(csv_path, index=False, encoding='utf-8-sig')
     logger.info(f"打分结果已保存到: {csv_path}")
 
-    high_risk = result[result['prob'] > 0.7]
+    
     logger.info("开始生成图表")
     img_url = draw_overdue_chart(result)
     # 构造返回
+    high_risk = result[result['prob'] > 0.7]
     return {
-        "result": high_risk.to_dict(orient='records'),
+        "result": result.to_dict(orient='records'),
         "csv_url": f"{REMOTE_ADDR}overdue_scores.csv",
         "img_url": img_url
     }
